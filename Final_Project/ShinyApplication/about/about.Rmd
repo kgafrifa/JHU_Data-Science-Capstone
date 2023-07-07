@@ -1,0 +1,29 @@
+---
+title: "John Hopkins SwiftKey Coursera Data Science Capstone - About"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+#### This application was developed using:
+
++ [The R Project for Statistical Computing](https://www.r-project.org/)
+
++ [RStudio](https://www.rstudio.com/)
+
++ [Shiny](https://shiny.rstudio.com/reference/shiny/)
+
+#### This application was developed by:
+
++ [Kwasi.Afrifa](https://www.linkedin.com/in/kwasi-afrifa/)
+
+I am an electrical and computer engineer with interests in machine learning, data science, computer
+vision, statistical modeling and data analysis, and signal processing. I graduated from Old Dominion
+University, Norfolk, VA, USA with doctorate in Electrical and Computer Engineering. I also have a
+Masters degree in Electrical Engineering from University of Windsor, Ontario, Canada and a Bachelors
+in Electrical and Electronics Engineering from Kwame Nkrumah University of Science and Technology,
+Kumasi, Ghana.
