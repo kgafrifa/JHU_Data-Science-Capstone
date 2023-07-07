@@ -1,0 +1,14 @@
+name: Rcoursera-Data-Science-Capstone
+title: Rcoursera-Data-Science-Capstone
+username:
+account: kgafrifa
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 9415486
+bundleId: 7432575
+url: https://kgafrifa.shinyapps.io/Rcoursera-data-science-capstone/
+when: 1688758364.60309
+lastSyncTime: 1688758364.6031
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .RData|readTxtFile.R|sample_data.R|final
