@@ -1,0 +1,442 @@
+---
+title: "build-ngram"
+author: "Kwasi G. Afrifa"
+date: "2023-07-05"
+output: html_document
+---
+
+
+### About the Data
+
+The data for this project was obtained from the course website through this [link](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip), which came from HC Corpora, a collection of corpora for various languages freely available to download. View `corpora-info.md` for more information about the data.
+
+There were several languages provided, but I only used the English files:
+
+-   `en_US.blogs.txt`: blogs text
+-   `en_US.news.txt`: news feed text
+-   `en_US.twitter.txt`: twitter text data
+
+## Environment Setup
+
+Prepare the session by loading initial packages and clearing the global
+workspace (including hidden objects).
+
+```{r load-packages, message = FALSE, echo = TRUE}
+library(knitr)
+rm(list = ls(all.names = TRUE))
+
+```
+
+## Load libraries
+
+I first start with loading the libraries using the package check function from [this article](https://vbaliga.github.io/verify-that-r-packages-are-installed-and-loaded/) to check if they're installed
+
+```{r load_libraries, message=FALSE}
+library(tm)
+library(dplyr)
+library(stringi)
+library(stringr)
+library(quanteda)
+library(data.table)
+library(htmlwidgets)
+library(tidyverse)
+library(here)
+library(feather)
+library(webshot)
+library(tidytext)
+library(kableExtra)
+library(RColorBrewer)
+library(wordcloud2)
+
+```
+
+```{r helper_funcs, eval=TRUE, include=FALSE}
+
+
+# other helper functions
+source('./readTxtFile.R')
+source('./sample_data.R')
+source('./get_bad_words.R')
+```
+
+## Getting the Data
+
+I coded a helper function `download_data` which essentially downloads the data from the URL from the course website based on the given local, then puts it under the data folder as a folder based on the specified name. It also removes the other data files. 
+
+```{r file_paths}
+# download_data("en_US", "original")
+
+# save the data path
+
+
+
+# save paths for our text data files
+blogs_txt_file <- ('./final/en_US/en_US.blogs.txt')
+con <- file(blogs_txt_file, "r")
+blogs <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+news_txt_file <- ('./final/en_US/en_US.news.txt')
+con <- file(news_txt_file, "r")
+news <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+twitter_txt_file <-  ('./final/en_US/en_US.twitter.txt')
+con <- file(twitter_txt_file, "r")
+twitter <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+```
+
+
+## Data Sampling
+
+Since the data is fairly large as observed from the file information, I've decided to sample the data to speed up my analysis and the development of the initial model. I have three sources - news, blogs and tweets.
+
+### Methodology
+
+Since news text will logically have better English standards like spelling and grammar, I will sample more (20%) from news, 10% from blogs, and 1% from twitter, which can be done using probability and `rbinom` from R
+
+
+
+```{r}
+# set seed for reproducibility
+set.seed(450067)
+
+
+# sample all three data sets
+sampleBlogs <- sample(blogs, length(blogs) * 0.10, replace = FALSE)
+sampleNews <- sample(news, length(news) * 0.20, replace = FALSE)
+sampleTwitter <- sample(twitter, length(twitter) * 0.01, replace = FALSE)
+
+# remove all non-English characters from the sampled data
+sampleBlogs <- iconv(sampleBlogs, "latin1", "ASCII", sub = "")
+sampleNews <- iconv(sampleNews, "latin1", "ASCII", sub = "")
+sampleTwitter <- iconv(sampleTwitter, "latin1", "ASCII", sub = "")
+```
+
+
+## Data Cleaning
+
+### Combined text data
+
+
+
+The text files are then combined together.
+
+```{r}
+# remove outliers such as very long and very short articles by only including
+# the IQR
+removeOutliers <- function(data) {
+  first <- quantile(nchar(data), 0.25)
+  third <- quantile(nchar(data), 0.75)
+  data <- data[nchar(data) > first]
+  data <- data[nchar(data) < third]
+  return(data)
+}
+sampleBlogs <- removeOutliers(sampleBlogs)
+sampleNews <- removeOutliers(sampleNews)
+sampleTwitter <- removeOutliers(sampleTwitter)
+
+# combine all three data sets into a single data set
+combined_txt <- paste(c(sampleBlogs, sampleNews, sampleTwitter))
+
+# clear from memory
+rm("twitter", "news", "blogs", "sampleBlogs", "sampleNews", "sampleTwitter")
+```
+
+Now it's time to clean the data to prepare it for analysis.
+
+### Checklist for cleaning
+
+-   Removing profanity
+-   Removing stop words (common words to be filtered like is, am, are)
+-   Remove punctuation
+-   Remove numbers
+-   Remove personal stop words (depends on analysis)
+
+Most of these tasks are already performed by the `unnest_tokens` function from `tidytext`, which makes my job easier.
+
+```{r stopwords}
+# Load data for stop words
+data(stop_words)
+head(stop_words)
+```
+
+```{r badwords}
+get_bad_words <- function() {
+    url <-
+        "http://www.cs.cmu.edu/~biglou/resources/bad-words.txt"
+    bad_words <- read.delim2(
+        file = url,
+        header = F,
+        sep = "\t",
+        col.names = "text"
+    )
+    return(bad_words)
+}
+
+bad_words <- get_bad_words() %>% 
+  rename('word' = text)
+
+head(bad_words, 3)
+
+## save bad words file
+write_rds(bad_words, "bad_words.rds")
+```
+
+With profane and stop words data ready, we can begin building our n-gram models. Note the cleaning is happening as we are building our ngram tibbles.
+
+## Data Transformation
+
+### Making ngrams with tidytext
+
+Below showcases the functionality of `unnest_tokens` in tidytext
+
+```{r}
+string <- "Alice was beginning to get very tired of sitting by her sister
+on the bank, and of having nothing to do:  once or twice she had
+peeped into the book her sister was reading, but it had no
+pictures or conversations in it, `and what is the use of a book,'
+thought Alice `without pictures or conversation?'"
+
+tibble(line = 1:length(string), text=string) %>% 
+  unnest_tokens(word, text) %>% 
+  head()
+```
+Here's how we get bigrams
+```{r}
+tibble(line = 1:length(string), text=string) %>% 
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>% 
+  head()
+```
+To get further ngrams, all you need to do is increase the value of n
+
+```{r}
+ngram_tb <- tibble(line = 1:(length(combined_txt)), text = combined_txt)
+head(ngram_tb)
+```
+
+### Unigram
+
+```{r unigram_tb}
+unigram_tb <-  ngram_tb %>% 
+  unnest_tokens(word, text) %>% # turn our text file into individual words
+  # anti_join(stop_words, by = "word") %>% # remove stop words
+  anti_join(bad_words, by = "word") %>% # remove profane words
+  filter(!str_detect(word, "\\d+")) %>% # filter digits
+  mutate_at("word", str_replace, "[[:punct:]]", "") # remove punctuation
+
+head(unigram_tb)
+```
+
+### Bigram
+
+```{r bigrams_tb}
+bigram_tb <- ngram_tb %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  mutate_at("bigram", str_replace, "[[:punct:]]", "") %>%
+  filter(!str_detect(bigram, "\\d+")) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  # filter(!word1 %in% stop_words$word,
+  #        !word2 %in% stop_words$word) %>% 
+  filter(!word1 %in% bad_words$word,
+         !word2 %in% bad_words$word)
+
+head(bigram_tb)
+```
+
+### Trigram
+
+```{r trigrams_tb}
+trigram_tb <- ngram_tb %>%
+  unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
+  mutate_at("trigram", str_replace, "[[:punct:]]", "") %>%
+  filter(!str_detect(trigram, "\\d+")) %>% 
+  separate(trigram, c("word1", "word2", "word3"), sep = " ") %>%
+  # filter(!word1 %in% stop_words$word,
+  #        !word2 %in% stop_words$word,
+  #        !word3 %in% stop_words$word) %>%
+  filter(!word1 %in% bad_words$word,
+         !word2 %in% bad_words$word,
+         !word3 %in% bad_words$word)
+
+head(trigram_tb)
+```
+
+### Quadgram
+
+```{r}
+quadgram_tb <- ngram_tb %>%
+  unnest_tokens(quadgram, text, token = "ngrams", n = 4) %>%
+  mutate_at("quadgram", str_replace, "[[:punct:]]", "") %>%
+  filter(!str_detect(quadgram, "\\d+")) %>% 
+  separate(quadgram, c("word1", "word2", "word3", "word4"), sep = " ") %>%
+  # filter(!word1 %in% stop_words$word,
+  #        !word2 %in% stop_words$word,
+  #        !word3 %in% stop_words$word,
+  #        !word4 %in% stop_words$word) %>%
+  filter(!word1 %in% bad_words$word,
+         !word2 %in% bad_words$word,
+         !word3 %in% bad_words$word,
+         !word4 %in% bad_words$word)
+
+head(quadgram_tb)
+```
+
+### Save the ngrams
+
+```{r}
+
+
+# save ngrams 
+ngrams_path <- here('app/data')
+write_rds(unigram_tb, "unigrams.rds")
+write_rds(bigram_tb, "bigrams.rds")
+write_rds(trigram_tb, "trigrams.rds")
+write_rds(quadgram_tb, "quadgram.rds")
+```
+
+With the data cleaned, we can start analyzing the frequency of words.
+
+
+## Document Term matrix
+
+For computers to understand our data, we need to convert it into a machine understandable form. In natural language processing (NLP), one of the techniques is called TF-IDF, which stands for term frequency, inverse document frequency.
+
+TF-IDF will convert text documents in to a form where each sentence is a document and words in the sentence are tokens. The result is something called a DocumentTermMatrix (DTM), or TermDocumentMatrix (TDM), depending on whether the documents correspond to row or column. What this does is essentially provide measure to weigh the importance of different words.
+
+Using the `tm` package, I can cast my data frames into a dtm.
+
+```{r}
+my_dtm <- ngram_tb %>%
+  unnest_tokens(word, text) %>% 
+  count(line, word) %>% 
+  cast_dtm(line, word, n)
+my_dtm
+```
+
+Our dtm has a total of 265350 sentences and 153707 terms. It also seems to be 100% sparse, which can cause problems to our model. This will have to be fixed later on.
+
+
+## Appendix
+
+### File information code
+
+```{r eval=FALSE, include=TRUE}
+
+# create txt file
+readTxtFile <- function(path) {
+    con <- file(path, "r")
+    text <- readLines(con, skipNul = T)
+    close(con)
+    return(text)
+}
+
+# Creates a table given the text files
+file_info <- function(names) {
+    # file size
+    size <- file.info(here(data_path, names))$size / (2 ** 20)
+    
+    # word count
+    (total_words_bash <-
+            system("wc -w ../data/original/*.txt", intern = TRUE))
+    regexp <- "[[:digit:]]+"
+    
+    word_count <-
+        unlist(str_split(str_extract(total_words_bash, regexp), " ")[1:3])
+    
+    line_count <- c()
+    max_line <- c()
+    
+    for (name in names) {
+        file <- readTxtFile(here(data_path, name))
+        num_lines <- length(file)
+        
+        longest_line <- as.numeric(summary(nchar(file))["Max."])
+        
+        line_count <- c(line_count, num_lines)
+        max_line <- c(longest_line, max_line)
+    }
+    
+    tb <- tibble(
+        "file_name" = names,
+        "size" = paste(round(size, 1), "MB"),
+        "line_count" = line_count,
+        "word_count" = as.integer(word_count),
+        "max_line" = as.integer(max_line)
+    ) %>%
+        mutate_if(is.numeric, list( ~ prettyNum(., big.mark = ",")))
+    
+    return(tb)
+}
+```
+
+### Bash version for file information
+
+```{bash eval=FALSE, include=TRUE}
+# -w gives word count
+# -c gives byte count
+# -l gives line count
+echo "  lines   words   bytes"
+wc -l -w -c  ../data/original/*
+```
+
+
+### Sampling text file code
+
+```{r eval=FALSE, include=TRUE}
+sample_file <- function(filename, filepath, prob) {
+    set.seed(2021)
+    con <- file(filepath, "r")
+    file <- readLines(con, skipNul = T)
+    len <- length(file)
+    sub_file <- file[rbinom(n = len, size = 1, prob = prob) == 1]
+    close(con)
+    
+    sample_path <- here("data/sampled")
+    if (!dir.exists(sample_path)) {
+        dir.create(sample_path)
+    }
+    
+    new_file_path <- paste0(sample_path, "/sub_", filename)
+    if (!file.exists(new_file_path)) {
+        out <- file(new_file_path, "w")
+        writeLines(sub_file, con = out)
+        close(out)
+    }
+}
+```
+
+
+
+### helper functions for plotting
+
+```{r eval=FALSE, include=TRUE}
+# plots top n words
+plot_top <- function(tibble, top_num) {
+    tibble %>%
+        rename(ngram = colnames(tibble)[2]) %>%
+        count(ngram, sort = TRUE) %>%
+        slice(1:top_num) %>%
+        mutate(ngram = reorder(ngram, n)) %>%
+        ggplot(aes(n, ngram)) +
+        geom_col() +
+        labs(y = NULL)
+}
+
+# word cloud plots top n words
+wordcloud_plot <- function(tibble, file_name, top_num=100) {
+  wordcloud <- tibble %>%
+    rename(ngram = colnames(tibble)[2]) %>%
+    count(ngram, sort = TRUE) %>%
+    slice(1:top_num) %>%
+    wordcloud2(size=0.7, color='random-dark', minRotation = 0, maxRotation = 0)
+  
+  saveWidget(wordcloud, "tmp.html", selfcontained = F) 
+  webshot("tmp.html", here("10_DataScienceCapstone/figs", file_name), delay = 5, vwidth = 1000, vheight = 800)
+  
+  unlink(here("10_DataScienceCapstone/report", "tmp_files"), recursive = TRUE)
+  unlink(here("10_DataScienceCapstone/report", "tmp.html"))
+}
+```
